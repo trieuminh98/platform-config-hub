@@ -31,6 +31,9 @@ Examples:
 # Generate both rules and skills (default)
 rules-gen --repo https://github.com/org/rules-hub.git
 
+# Generate using spec file from inside the hub repo
+rules-gen --repo https://github.com/org/platform-config-hub.git --spec-in-repo rules.yaml
+
 # Only rules
 rules-gen --repo https://github.com/org/rules-hub.git --kind rules
 
@@ -44,7 +47,9 @@ rules-gen --repo https://github.com/org/rules-hub.git --out cursor
 ## CLI options
 
 - `--repo <git-url>`: required. The hub repo to clone (main branch).
-- `--spec <rules.yaml>`: optional spec file (defaults to `rules.yaml` if present).
+- `--spec <rules.yaml>`: optional local spec file (defaults to `rules.yaml` if present).
+- `--spec-in-repo <path>`: optional spec path inside the cloned hub repo (for example `rules.yaml`).
+  - Use either `--spec` or `--spec-in-repo`, not both.
 - `--kind <list>`: `rules,skills` (default). Use one or both.
 - `--out <list>`: `cursor,codex` (default). Use one or both.
 - `--cursor-out <path>`: rules Cursor output (default `.cursor/rules`).

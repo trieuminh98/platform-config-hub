@@ -77,7 +77,11 @@ program
   .requiredOption("--repo <git-url>", "Rules hub git repo (main branch)")
   .option(
     "--spec <rules.yaml>",
-    "Optional YAML spec in current project (defaults to rules.yaml if present)",
+    "Optional local YAML spec file (defaults to rules.yaml if present)",
+  )
+  .option(
+    "--spec-in-repo <path>",
+    "Optional YAML spec path inside the cloned hub repo (resolved from repo root)",
   )
   .option("--kind <list>", "rules,skills", "rules,skills")
   .option("--out <list>", "cursor,codex", "cursor,codex")
@@ -98,48 +102,22 @@ const spinner = ora({
 }).start();
 
 (async () => {
-  spinner.text = "Loading spec and validating options...";
-  const spec = loadSpec(opts.spec);
-
-  // defaults (CLI override > spec.outputs > default)
-  const rulesCursorOut = opts.cursorOut ?? spec.rules.outputs?.cursor?.path ?? ".cursor/rules";
-  const rulesCodexOutRaw = opts.codexOut ?? spec.rules.outputs?.codex?.path ?? "AGENTS.md";
-
-  const skillsCursorOut =
-    opts.skillsCursorOut ?? spec.skills.outputs?.cursor?.path ?? ".cursor/skills";
-  const skillsCodexOut = opts.skillsCodexOut ?? spec.skills.outputs?.codex?.path ?? ".codex/skills";
-  const skillsRoot = opts.skillsRoot ?? spec.skills.outputs?.agent?.path ?? ".agent/skills";
-
-  // codex-out can be folder or file
-  const rulesCodexOut = isDirPath(rulesCodexOutRaw)
-    ? path.join(rulesCodexOutRaw, "AGENTS.md")
-    : rulesCodexOutRaw;
-
-  if (kindTargets.includes("skills")) {
-    if (outTargets.includes("cursor") && !isDirPath(skillsCursorOut)) {
-      throw new Error(`Skills cursor output must be a directory. got="${skillsCursorOut}"`);
-    }
-    if (outTargets.includes("codex") && !isDirPath(skillsCodexOut)) {
-      throw new Error(`Skills codex output must be a directory. got="${skillsCodexOut}"`);
-    }
-    if (!isDirPath(skillsRoot)) {
-      throw new Error(`Skills root output must be a directory. got="${skillsRoot}"`);
-    }
+  if (opts.spec && opts.specInRepo) {
+    throw new Error("Use either --spec or --spec-in-repo, not both.");
   }
-
-  const gitignoreTargets: string[] = [];
-  if (outTargets.includes("cursor")) gitignoreTargets.push(".cursor");
-  if (outTargets.includes("codex")) {
-    gitignoreTargets.push(".codex");
-    if (kindTargets.includes("rules")) gitignoreTargets.push("AGENTS.md");
-  }
-  if (kindTargets.includes("skills")) gitignoreTargets.push(".agent");
-
-  ensureGitignorePatterns(gitignoreTargets);
 
   let hubDir: string | null = null;
   let summary = "";
+  let spec: ReturnType<typeof loadSpec> | null = null;
+  let specBaseDir = process.cwd();
+
   try {
+    spinner.text = "Loading spec and validating options...";
+    if (!opts.specInRepo) {
+      spec = loadSpec(opts.spec);
+      if (opts.spec) specBaseDir = path.dirname(path.resolve(opts.spec));
+    }
+
     spinner.text = "Cloning hub repo...";
     hubDir = await cloneMain(opts.repo);
     const repoDir = hubDir;
@@ -147,6 +125,52 @@ const spinner = ora({
     const header = `<!-- GENERATED: do not edit. repo=${opts.repo} branch=main -->\n`;
 
     if (!repoDir) throw new Error("Failed to clone repo");
+
+    if (opts.specInRepo) {
+      spinner.text = "Loading spec from hub repo...";
+      const specInRepoPath = path.resolve(repoDir, opts.specInRepo);
+      spec = loadSpec(specInRepoPath);
+      specBaseDir = path.dirname(specInRepoPath);
+    }
+
+    if (!spec) throw new Error("Failed to load spec.");
+
+    // defaults (CLI override > spec.outputs > default)
+    const rulesCursorOut = opts.cursorOut ?? spec.rules.outputs?.cursor?.path ?? ".cursor/rules";
+    const rulesCodexOutRaw = opts.codexOut ?? spec.rules.outputs?.codex?.path ?? "AGENTS.md";
+
+    const skillsCursorOut =
+      opts.skillsCursorOut ?? spec.skills.outputs?.cursor?.path ?? ".cursor/skills";
+    const skillsCodexOut =
+      opts.skillsCodexOut ?? spec.skills.outputs?.codex?.path ?? ".codex/skills";
+    const skillsRoot = opts.skillsRoot ?? spec.skills.outputs?.agent?.path ?? ".agent/skills";
+
+    // codex-out can be folder or file
+    const rulesCodexOut = isDirPath(rulesCodexOutRaw)
+      ? path.join(rulesCodexOutRaw, "AGENTS.md")
+      : rulesCodexOutRaw;
+
+    if (kindTargets.includes("skills")) {
+      if (outTargets.includes("cursor") && !isDirPath(skillsCursorOut)) {
+        throw new Error(`Skills cursor output must be a directory. got="${skillsCursorOut}"`);
+      }
+      if (outTargets.includes("codex") && !isDirPath(skillsCodexOut)) {
+        throw new Error(`Skills codex output must be a directory. got="${skillsCodexOut}"`);
+      }
+      if (!isDirPath(skillsRoot)) {
+        throw new Error(`Skills root output must be a directory. got="${skillsRoot}"`);
+      }
+    }
+
+    const gitignoreTargets: string[] = [];
+    if (outTargets.includes("cursor")) gitignoreTargets.push(".cursor");
+    if (outTargets.includes("codex")) {
+      gitignoreTargets.push(".codex");
+      if (kindTargets.includes("rules")) gitignoreTargets.push("AGENTS.md");
+    }
+    if (kindTargets.includes("skills")) gitignoreTargets.push(".agent");
+
+    ensureGitignorePatterns(gitignoreTargets);
 
     const resolveSources = async (patterns: string[], label: string) => {
       if (!patterns || patterns.length === 0) {
@@ -166,13 +190,20 @@ const spinner = ora({
     };
 
     const overlayText = (overlays: string[]) => {
-      const overlayTexts = overlays.map((p) => readUtf8(path.resolve(p)));
+      const overlayTexts = overlays.map((p) => readUtf8(path.resolve(specBaseDir, p)));
       return overlayTexts.length ? "\n\n" + overlayTexts.join("\n\n") : "";
     };
 
     const toCursorRel = (relNoPrefix: string) =>
       relNoPrefix.replace(/\.rules?\.md$/i, ".mdc").replace(/\.md$/i, ".mdc");
     const toSkillRel = (relNoPrefix: string) => relNoPrefix.replace(/\\/g, "/");
+    const stripPrefixToSegment = (rel: string, segment: "rules" | "skills") => {
+      const marker = `/${segment}/`;
+      if (rel.startsWith(`${segment}/`)) return rel.slice(segment.length + 1);
+      const idx = rel.indexOf(marker);
+      if (idx !== -1) return rel.slice(idx + marker.length);
+      return rel;
+    };
 
     if (kindTargets.includes("rules")) {
       spinner.text = "Generating rules...";
@@ -187,7 +218,7 @@ const spinner = ora({
           const cursorText = extractTargets(body, new Set(["all", "cursor"]));
           const cursorWithFm = (frontmatterRaw ?? "") + cursorText;
 
-          const relNoPrefix = rel.replace(/^rules[\\/]/, "");
+          const relNoPrefix = stripPrefixToSegment(rel, "rules");
           const outRel = toCursorRel(relNoPrefix);
 
           const outPath = path.join(process.cwd(), rulesCursorOut, outRel);
@@ -203,7 +234,7 @@ const spinner = ora({
           const raw = readUtf8(abs) + overlayJoined;
           const { frontmatter, body } = splitFrontmatter(raw);
           const codexText = extractTargets(body, new Set(["all", "codex"]));
-          const relNoPrefix = rel.replace(/^rules[\\/]/, "");
+          const relNoPrefix = stripPrefixToSegment(rel, "rules");
 
           // build AGENTS: alwaysApply true => inline content; otherwise point to cursor rule
           const alwaysApply = frontmatter?.alwaysApply;
@@ -256,7 +287,7 @@ const spinner = ora({
           const skillText = extractTargets(body, new Set(["all", "cursor", "codex"]));
           const skillWithFm = (frontmatterRaw ?? "") + skillText;
 
-          const relNoPrefix = rel.replace(/^skills[\\/]/, "");
+          const relNoPrefix = stripPrefixToSegment(rel, "skills");
           const outRel = toSkillRel(relNoPrefix);
 
           const outPath = path.join(process.cwd(), skillsRoot, outRel);
