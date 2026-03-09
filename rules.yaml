@@ -1,0 +1,10 @@
+rules:
+  sources:
+    - packages/rules-hub/rules/**/*.rules.md
+    - packages/rules-hub/rules/**/*.md
+  overlays: []
+
+skills:
+  sources:
+    - packages/rules-hub/skills/**/*.md
+  overlays: []
