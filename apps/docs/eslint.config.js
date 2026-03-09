@@ -1,4 +1,6 @@
-import { nextJsConfig } from "@repo/eslint-config/next-js";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
 
-/** @type {import("eslint").Linter.Config[]} */
-export default nextJsConfig;
+const eslintConfig = [...nextVitals, ...nextTs];
+
+export default eslintConfig;
